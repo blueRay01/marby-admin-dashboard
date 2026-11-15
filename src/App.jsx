@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { COINS, getOverview, signOut } from "./api.js";
+import { COINS, currentUser, getOverview, signOut, watchSignOut } from "./api.js";
 import Shell from "./components/Shell.jsx";
 import SignIn from "./pages/SignIn.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
@@ -17,9 +17,14 @@ const ADMIN_ONLY = ["settings", "users", "audit"];
 const readHash = () => window.location.hash.replace(/^#\/?/, "") || "dashboard";
 
 export default function App() {
-  const [user, setUser] = useState(() => JSON.parse(sessionStorage.getItem("dmarby-user") || "null"));
+  const [user, setUser] = useState(undefined); // undefined = still checking for a saved login
   const [page, setPage] = useState(readHash);
   const [badges, setBadges] = useState({});
+
+  useEffect(() => {
+    currentUser().then(setUser);
+    return watchSignOut(() => setUser(null));
+  }, []);
 
   useEffect(() => {
     const onHash = () => setPage(readHash());
@@ -45,12 +50,10 @@ export default function App() {
 
   useEffect(() => { if (user) refreshBadges(); }, [user, page, refreshBadges]);
 
+  if (user === undefined) return <div className="signin"><div className="coin big">20</div></div>;
+
   if (!user) {
-    return <SignIn onSignedIn={(u) => {
-      sessionStorage.setItem("dmarby-user", JSON.stringify(u));
-      setUser(u);
-      go("dashboard");
-    }} />;
+    return <SignIn onSignedIn={(u) => { setUser(u); go("dashboard"); }} />;
   }
 
   const allowed = PAGES[page] && (!ADMIN_ONLY.includes(page) || user.role === "Admin");
@@ -58,7 +61,7 @@ export default function App() {
 
   return (
     <Shell page={allowed ? page : "dashboard"} go={go} user={user} badges={badges}
-           onSignOut={() => { signOut(); sessionStorage.removeItem("dmarby-user"); setUser(null); }}>
+           onSignOut={() => { signOut().finally(() => setUser(null)); }}>
       <Page user={user} go={go} onChange={refreshBadges} />
     </Shell>
   );

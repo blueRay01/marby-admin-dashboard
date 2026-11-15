@@ -7,6 +7,8 @@
 // transaction_numbers.sqlite3 (number, created_at, mode, kind, status, details).
 // toTx() turns a row into what the pages show, so real rows can drop straight in.
 
+import { configured, supabase } from "./supabase.js";
+
 const wait = (ms = 250) => new Promise((r) => setTimeout(r, ms));
 
 export const COINS = [20, 10, 5, 1];
@@ -180,25 +182,56 @@ export function machineState() {
   return { state: "running", reason: "Taking exchanges" };
 }
 
-// ---- Auth ----
-export async function signIn(email, password) {
-  await wait();
-  if (!email.includes("@") || password.length < 4) {
-    throw new Error("Check your email and password, then try again.");
-  }
-  return { needsCode: true, email };
+// ---- Auth (Supabase) ----
+async function loadAdmin(authUser) {
+  const { data, error } = await supabase.from("admins").select("name, role").eq("id", authUser.id).maybeSingle();
+  if (error) throw new Error("Couldn't check your account. Try again.");
+  if (!data) return null;
+  db.user = { name: data.name, email: authUser.email, role: data.role };
+  return db.user;
 }
 
-export async function verifyCode(email, code) {
-  await wait();
-  if (!/^\d{6}$/.test(code)) throw new Error("Enter the 6-digit code from your authenticator app.");
-  const user = db.users.find((u) => u.email === email) || { name: email.split("@")[0], email, role: "Staff" };
-  db.user = user;
-  return user;
+/** Signs in and returns the admin, or throws a message for the sign-in screen. */
+export async function signIn(email, password) {
+  if (!configured) throw new Error("The dashboard isn't connected yet. Add your Supabase details to .env.");
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) {
+    throw new Error(error.status === 400
+      ? "Wrong email or password."
+      : "Couldn't reach the server. Check your connection and try again.");
+  }
+  const admin = await loadAdmin(data.user);
+  if (!admin) {
+    await supabase.auth.signOut();
+    throw new Error("This account isn't on the admin list yet. Ask a D' MARBY admin to add you.");
+  }
+  return admin;
+}
+
+/** The admin from a saved session (page refresh), or null. */
+export async function currentUser() {
+  if (!configured) return null;
+  const { data } = await supabase.auth.getSession();
+  if (!data.session) return null;
+  try {
+    return await loadAdmin(data.session.user);
+  } catch {
+    return null;
+  }
+}
+
+/** Runs onSignedOut when the session ends (sign-out in another tab, expired login). */
+export function watchSignOut(onSignedOut) {
+  if (!configured) return () => {};
+  const { data } = supabase.auth.onAuthStateChange((event) => {
+    if (event === "SIGNED_OUT") onSignedOut();
+  });
+  return () => data.subscription.unsubscribe();
 }
 
 export async function signOut() {
   db.user = null;
+  if (configured) await supabase.auth.signOut();
 }
 
 // ---- Reads ----
