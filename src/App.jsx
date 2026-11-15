@@ -20,6 +20,15 @@ export default function App() {
   const [user, setUser] = useState(undefined); // undefined = still checking for a saved login
   const [page, setPage] = useState(readHash);
   const [badges, setBadges] = useState({});
+  const [loadError, setLoadError] = useState("");
+
+  // Any failed request (offline, expired login) shows a message instead of an endless skeleton.
+  useEffect(() => {
+    const onFail = (e) => setLoadError(e.reason?.message || "Something went wrong loading data.");
+    window.addEventListener("unhandledrejection", onFail);
+    return () => window.removeEventListener("unhandledrejection", onFail);
+  }, []);
+  useEffect(() => { setLoadError(""); }, [page]);
 
   useEffect(() => {
     currentUser().then(setUser);
@@ -38,7 +47,8 @@ export default function App() {
   }, []);
 
   const refreshBadges = useCallback(() => {
-    getOverview().then((d) => {
+    getOverview().catch(() => null).then((d) => {
+      if (!d) return;
       const next = {};
       const empty = COINS.filter((c) => d.stock[c].count === 0);
       if (empty.length) next.stock = { tone: "red", text: `₱${empty[0]} empty` };
@@ -62,7 +72,13 @@ export default function App() {
   return (
     <Shell page={allowed ? page : "dashboard"} go={go} user={user} badges={badges}
            onSignOut={() => { signOut().finally(() => setUser(null)); }}>
-      <Page user={user} go={go} onChange={refreshBadges} />
+      {loadError && (
+        <button className="note red" style={{ width: "100%", textAlign: "left", marginTop: 12 }}
+                onClick={() => window.location.reload()}>
+          <span>{loadError}</span><span className="link">Reload</span>
+        </button>
+      )}
+      <Page key={page} user={user} go={go} onChange={refreshBadges} />
     </Shell>
   );
 }

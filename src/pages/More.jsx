@@ -285,9 +285,10 @@ export function Settings() {
     <>
       <Title sub="Applies to Machine 01">Settings</Title>
       <form className="card" onSubmit={(e) => { e.preventDefault(); saveSettings(s).then(() => setSaved(true)); }}>
-        <label className="field"><span>GCash fee (%)</span>
-          <input className="input" inputMode="decimal" value={s.gcashFeePercent} onChange={set("gcashFeePercent")} /></label>
-        <label className="field"><span>Mark a hopper low below (%)</span>
+        <div className="row" style={{ marginBottom: 14 }}>
+          <span className="label">GCash fee</span><b>{s.gcashFeePercent}%, set on the kiosk</b>
+        </div>
+        <label className="field"><span>Mark a hopper low below (%), on this browser</span>
           <input className="input" inputMode="numeric" value={s.lowStockPercent} onChange={set("lowStockPercent")} /></label>
         <button className="btn primary">{saved ? "Saved" : "Save settings"}</button>
       </form>
@@ -300,13 +301,13 @@ export function Users() {
   useEffect(() => { getUsers().then(setList); }, []);
   return (
     <>
-      <Title sub="Who can sign in to this admin site">Users and roles</Title>
+      <Title sub="Who can sign in. Add people in Supabase, then add them to the admins table.">Users and roles</Title>
       {!list ? <div className="skeleton" /> : (
         <div className="card tx-list">
           {list.map((u) => (
-            <div className="tx" key={u.email}>
+            <div className="tx" key={u.name}>
               <div className="tx-icon" style={{ fontWeight: 700 }}>{u.name[0]}</div>
-              <div><div className="tx-title">{u.name}</div><div className="tx-meta">{u.email}</div></div>
+              <div><div className="tx-title">{u.name}</div></div>
               <span style={{ marginLeft: "auto" }}><Pill tone={u.role === "Admin" ? "blue" : "grey"}>{u.role}</Pill></span>
             </div>
           ))}

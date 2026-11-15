@@ -29,6 +29,14 @@ export default function Dashboard({ user, go }) {
   );
 }
 
+function lastSeen(s) {
+  if (s == null) return "No check-in yet";
+  if (s < 60) return `Last check-in ${s}s ago`;
+  if (s < 3600) return `Last check-in ${Math.round(s / 60)} min ago`;
+  if (s < 86400) return `Last check-in ${Math.round(s / 3600)} h ago`;
+  return `Last check-in ${Math.round(s / 86400)} days ago`;
+}
+
 function Body({ data, go }) {
   const { machine, stock, gcashFloat, kpis, hourly } = data;
   const paused = machine.state === "paused" || machine.state === "offline";
@@ -56,7 +64,7 @@ function Body({ data, go }) {
             <span className="pill" style={{ padding: 0, height: "auto" }}><span className="dot" /></span>
             {machine.online ? "Online" : "Offline"}
           </span>
-          <span className="muted">Last check-in {machine.lastSeenSeconds}s ago</span>
+          <span className="muted">{lastSeen(machine.lastSeenSeconds)}</span>
         </div>
       </div>
 
@@ -88,7 +96,7 @@ function Body({ data, go }) {
 
       <div className="kpis">
         <div className="kpi"><div className="label">Exchanges</div><div className="n">{kpis.exchanges}</div>
-          <div className="d">+{kpis.exchangesDelta} vs yesterday</div></div>
+          <div className="d">{kpis.exchangesDelta >= 0 ? "+" : ""}{kpis.exchangesDelta} vs yesterday</div></div>
         <div className="kpi"><div className="label">Cash-ins</div><div className="n">{kpis.cashIns}</div>
           <div className="d">{peso(kpis.cashInTotal)} total</div></div>
         <div className="kpi"><div className="label">Fees</div><div className="n">{peso(kpis.fees)}</div>

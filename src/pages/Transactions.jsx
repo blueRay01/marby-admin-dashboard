@@ -36,7 +36,7 @@ export function TxRow({ t }) {
     <div className="tx">
       <div className={`tx-icon ${tone}`}>{Icon[t.type]}</div>
       <div style={{ minWidth: 0 }}>
-        <div className="tx-title">{txTitle(t)}</div>
+        <div className="tx-title">{txTitle(t)}{t.mode === "demo" && <span className="demo-tag">Demo</span>}</div>
         <div className="tx-meta">{timeOf(t.time)}, Ref {t.ref}{t.detail ? `, ${t.detail}` : ""}</div>
       </div>
       <div className="tx-amt">

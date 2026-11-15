@@ -1,194 +1,188 @@
-// All data the admin site shows comes through this file.
-// Right now it returns sample data kept in memory. When the kiosk backend is
-// ready, replace each function body with a fetch() to the real endpoint and
-// keep the same return shapes, so no page has to change.
-//
-// Transactions are stored exactly like rows in the kiosk's
-// transaction_numbers.sqlite3 (number, created_at, mode, kind, status, details).
-// toTx() turns a row into what the pages show, so real rows can drop straight in.
+// All data the admin site shows comes through this file, live from Supabase.
+// Rows in `transactions` are the kiosk's own records (number, created_at, mode,
+// kind, status, details), synced by dmarby_sync.py on the Pi. toTx() turns one
+// row into what the pages show. Writes go through database functions that check
+// the signed-in admin (see supabase/setup.sql).
 
-import { configured, supabase } from "./supabase.js";
-
-const wait = (ms = 250) => new Promise((r) => setTimeout(r, ms));
+import { MACHINE_ID, configured, supabase } from "./supabase.js";
 
 export const COINS = [20, 10, 5, 1];
+const DEFAULT_CAPACITY = { 20: 60, 10: 80, 5: 100, 1: 200 };
+const OFFLINE_AFTER_S = 180;          // no heartbeat for 3 minutes = offline
+const GCASH_FEE_PERCENT = 3;          // set on the kiosk (dmarby.py GCASH_FEE_RATE)
+const EXCHANGES = ["bill", "break", "combine"];
 
-const today = new Date();
-const at = (h, m) => {
-  const d = new Date(today);
-  d.setHours(h, m, 0, 0);
-  return d.toISOString();
-};
-// The kiosk writes local time as "YYYY-MM-DD HH:MM:SS".
-const kioskTime = (h, m) => {
-  const d = new Date(today);
-  d.setHours(h, m, 0, 0);
-  const p = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(h)}:${p(m)}:00`;
-};
-const fromKioskTime = (s) => new Date(s.replace(" ", "T")).toISOString();
+let currentAdmin = null;
 
-// ---- Sample kiosk rows (newest first) ----
-// kind: "cash" | "gcash"
-// status: "completed" | "pending" | "sent" | "refunded" | "incident" | "forfeit"
-// Fields outside `details` (sent_at, resolved_at, ...) are added by the dashboard, not the kiosk.
-const rows = [
-  { number: "000041", created_at: kioskTime(14, 41), mode: "hardware", kind: "gcash", status: "pending",
-    details: { amount: 97, fee: 3, received: 100, number: "09171234567", name: "JUAN DELA CRUZ" } },
-  { number: "000040", created_at: kioskTime(14, 33), mode: "hardware", kind: "cash", status: "completed",
-    details: { flow: "bill", amount: 50, plan: { 20: 2, 5: 2 } } },
-  { number: "000039", created_at: kioskTime(14, 20), mode: "hardware", kind: "gcash", status: "refunded",
-    details: { flow: "gcash", amount: 20, plan: { 10: 2 } } },
-  { number: "000038", created_at: kioskTime(14, 5), mode: "hardware", kind: "cash", status: "incident",
-    details: { type: "jam", owed: 30, flow: "bill", inserted: [["bill", 50]] } },
-  { number: "000037", created_at: kioskTime(13, 52), mode: "hardware", kind: "cash", status: "completed",
-    details: { flow: "break", amount: 20, plan: { 10: 1, 1: 10 } } },
-  { number: "000036", created_at: kioskTime(13, 48), mode: "hardware", kind: "gcash", status: "pending",
-    details: { amount: 51, fee: 2, received: 53, number: "09281101102", name: "MA. ANGELICA REYES" } },
-  { number: "000035", created_at: kioskTime(13, 30), mode: "hardware", kind: "gcash", status: "sent",
-    details: { amount: 48, fee: 2, received: 50, number: "09953301310", name: "KLYDEL SANTOS" },
-    sent_at: at(13, 41), sent_by: "Mara D." },
-  { number: "000034", created_at: kioskTime(13, 12), mode: "hardware", kind: "cash", status: "completed",
-    details: { flow: "bill", amount: 100, plan: { 20: 5 } } },
-  { number: "000033", created_at: kioskTime(12, 58), mode: "hardware", kind: "cash", status: "completed",
-    details: { flow: "break", amount: 10, plan: { 5: 2 } } },
-  { number: "000032", created_at: kioskTime(12, 41), mode: "hardware", kind: "cash", status: "incident",
-    details: { type: "wrong_bill_unpayable", owed: 100, flow: "bill", inserted: [["bill", 100]],
-               bill: 100, picked_bill: 50 },
-    resolved_at: at(13, 5), resolved_by: "Jun R." },
-  { number: "000031", created_at: kioskTime(12, 15), mode: "hardware", kind: "cash", status: "completed",
-    details: { flow: "combine", amount: 20, plan: { 20: 1 } } },
-  { number: "000030", created_at: kioskTime(11, 47), mode: "hardware", kind: "cash", status: "completed",
-    details: { flow: "bill", amount: 50, plan: { 20: 2, 10: 1 } } },
-  { number: "000029", created_at: kioskTime(11, 20), mode: "hardware", kind: "gcash", status: "sent",
-    details: { amount: 19, fee: 1, received: 20, number: "09175550199", name: "EDWARD LIM" },
-    sent_at: at(11, 32), sent_by: "Jun R." },
-  { number: "000028", created_at: kioskTime(10, 33), mode: "hardware", kind: "cash", status: "completed",
-    details: { flow: "bill", amount: 50, plan: { 10: 5 } } },
-];
+// ---- Helpers ----
 
+function fail(error, fallback = "Couldn't load data. Check your connection and try again.") {
+  if (error) throw new Error(error.message || fallback);
+}
+
+const sumPlan = (plan = {}) => Object.entries(plan).reduce((s, [c, n]) => s + Number(c) * n, 0);
+const coinsIn = (plan = {}) => Object.values(plan).reduce((s, n) => s + n, 0);
+const masked = (n = "") => `${n.slice(0, 4)} *** ${n.slice(7)}`;
+const describe = (plan = {}) =>
+  Object.keys(plan).map(Number).sort((a, b) => b - a)
+    .map((c) => (plan[c] === 1 ? `₱${c}` : `${plan[c]} × ₱${c}`)).join(" + ");
+
+const FLOW_NAMES = { bill: "bill to coins", break: "break coins", combine: "combine coins", gcash: "GCash" };
 const INCIDENT_TITLES = {
   jam: "Coins got stuck",
   hardware: "Service required",
   cant_change: "Couldn't give change",
   wrong_bill_unpayable: "Wrong bill, couldn't change",
   overpayment: "Overpaid",
+  home_cancelled: "Customer left mid-exchange",
   timeout: "Customer left money",
 };
 
-const FLOW_NAMES = { bill: "bill to coins", break: "break coins", combine: "combine coins", gcash: "GCash" };
+function startOf(range) {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  if (range === "yesterday") d.setDate(d.getDate() - 1);
+  if (range === "week") d.setDate(d.getDate() - 6);
+  if (range === "month") d.setDate(1);
+  return d;
+}
 
-const describe = (plan = {}) =>
-  Object.keys(plan).map(Number).sort((a, b) => b - a)
-    .map((c) => (plan[c] === 1 ? `₱${c}` : `${plan[c]} × ₱${c}`)).join(" + ");
-const coinsIn = (plan = {}) => Object.values(plan).reduce((s, n) => s + n, 0);
-const masked = (n = "") => `${n.slice(0, 4)} *** ${n.slice(7)}`;
+function rangeBounds(range) {
+  const from = startOf(range);
+  const to = range === "yesterday" ? startOf("today") : null;
+  return { from: from.toISOString(), to: to && to.toISOString() };
+}
 
-/** One kiosk row -> what the pages show. */
+// Low-stock threshold is a dashboard preference, kept in this browser.
+function lowStockPercent() {
+  try {
+    return Number(localStorage.getItem("dmarby-low-stock")) || 25;
+  } catch {
+    return 25;
+  }
+}
+
+// ---- Kiosk row -> page item ----
+
+/** Money still owed on a hardware incident: coins/bills taken in minus coins paid out. */
+function owedFromJournal(d) {
+  const received = (d.received || []).reduce((s, r) => s + (r.value || 0), 0) +
+    (d.uncredited_inputs || []).reduce((s, r) => s + (r.value || 0), 0);
+  return Math.max(0, (d.credit ?? received) - sumPlan(d.dispensed));
+}
+
 export function toTx(r) {
   const d = r.details || {};
-  const base = { id: r.number, ref: r.number, time: fromKioskTime(r.created_at), mode: r.mode };
+  const base = { id: r.number, ref: r.number, time: r.created_at, mode: r.mode };
   if (r.status === "incident" || r.status === "forfeit") {
-    const type = r.status === "forfeit" ? "timeout" : d.type;
-    return { ...base, type: "incident", incident: type, title: INCIDENT_TITLES[type] || "Incident", info: d,
-             note: r.resolution_note,
-             amount: d.owed ?? d.amount ?? 0, detail: d.flow ? `During ${FLOW_NAMES[d.flow] || d.flow}` : "",
-             resolved: Boolean(r.resolved_at), resolvedAt: r.resolved_at, resolvedBy: r.resolved_by };
+    const type = r.status === "forfeit" ? "timeout" : d.type || d.incident?.type || "hardware";
+    const flow = d.flow;
+    return {
+      ...base, type: "incident", incident: type, title: INCIDENT_TITLES[type] || "Incident", info: d,
+      amount: d.owed ?? (d.status ? owedFromJournal(d) : d.amount ?? 0),
+      detail: flow ? `During ${FLOW_NAMES[flow] || flow}` : d.fault ? "Machine stopped" : "",
+      resolved: Boolean(r.resolved_at), resolvedAt: r.resolved_at, resolvedBy: r.resolved_by,
+      note: r.resolution_note,
+    };
   }
   if (r.status === "refunded") {
     return { ...base, type: "refund", amount: d.amount, detail: `Coins returned: ${describe(d.plan)}` };
   }
   if (r.kind === "gcash") {
-    return { ...base, type: "gcash", amount: d.amount, fee: d.fee, received: d.received,
-             gcashNumber: d.number, gcashName: d.name, detail: `${masked(d.number)}, ${d.name}`,
-             gcashStatus: r.status, sentAt: r.sent_at, sentBy: r.sent_by };
+    return {
+      ...base, type: "gcash", amount: d.amount, fee: d.fee, received: d.received,
+      gcashNumber: d.number || "", gcashName: d.name || "",
+      detail: d.number ? `${masked(d.number)}, ${d.name || ""}` : "",
+      gcashStatus: r.status, sentAt: r.sent_at, sentBy: r.sent_by,
+    };
   }
-  const n = coinsIn(d.plan);
-  const detail = d.flow === "bill" ? `₱${d.amount} bill, ${n} coin${n === 1 ? "" : "s"}` : `Gave ${describe(d.plan)}`;
-  return { ...base, type: d.flow, amount: d.amount, detail };
+  const amount = d.amount ?? d.credit ?? 0;
+  const plan = d.plan || {};
+  const n = coinsIn(plan);
+  const flow = d.flow || (d.source === "bill" ? "bill" : "break");
+  const detail = flow === "bill" ? `₱${amount} bill, ${n} coin${n === 1 ? "" : "s"}` : `Gave ${describe(plan)}`;
+  return { ...base, type: flow, amount, detail };
 }
 
-const db = {
-  user: null,
-  machine: {
-    name: "Machine 01",
-    location: "Main Lobby",
-    online: true,
-    lastSeenSeconds: 12,
-  },
-  // count = coins in the hopper now, capacity = full hopper (kiosk: START_STOCK / config)
-  stock: {
-    20: { count: 38, capacity: 60 },
-    10: { count: 54, capacity: 80 },
-    5: { count: 0, capacity: 100 },
-    1: { count: 31, capacity: 200 },
-  },
-  gcashFloat: { balance: 1850, target: 3000 },
-  cashBox: { since: at(6, 2) },
-  // last physical count per hopper, with what the machine expected at that moment
-  lastCount: { 20: { counted: 38, expected: 38 }, 10: { counted: 52, expected: 54 }, 5: { counted: 0, expected: 0 }, 1: null },
-  activity: [
-    { id: "A-4", kind: "gcash", text: "Sent ₱48 to GCash (Ref 000035)", who: "Mara D.", time: at(13, 41) },
-    { id: "A-3", kind: "refill", text: "Refill ₱5 +100 coins", who: "Mara D.", time: at(9, 10) },
-    { id: "A-2", kind: "cash", text: "Collected ₱3,500", who: "Jun R.", time: at(6, 2) },
-  ],
-  users: [
-    { name: "Mara D.", email: "mara@dmarby.ph", role: "Admin" },
-    { name: "Jun R.", email: "jun@dmarby.ph", role: "Staff" },
-    { name: "Klydel S.", email: "klydel@dmarby.ph", role: "Staff" },
-  ],
-  settings: { contactNumber: "09XX XXX XXXX", gcashFeePercent: 3, lowStockPercent: 25 },
-};
-
-const txs = () => rows.map(toTx);
-const openIncidents = () => txs().filter((t) => t.type === "incident" && !t.resolved);
-const pendingGcash = () => txs().filter((t) => t.type === "gcash" && t.gcashStatus === "pending");
-
-/** Money that went into the cash box since the last collection (bills + coins inserted). */
-function cashBoxTotals() {
-  const since = new Date(db.cashBox.since);
+/** Bills and coins a transaction put into the cash box. */
+function cashIn(r) {
+  const d = r.details || {};
   let bills = 0, coins = 0;
-  for (const r of rows) {
-    if (new Date(fromKioskTime(r.created_at)) < since) continue;
-    const d = r.details || {};
-    if (r.status === "incident" || r.status === "forfeit") {
-      for (const [src, v] of d.inserted || []) src === "bill" ? (bills += v) : (coins += v);
-    } else if (r.kind === "gcash" && r.status !== "refunded") {
-      coins += d.received || 0;
-    } else if (r.status === "refunded") {
-      coins += d.amount || 0;   // coins went in, same value came back out of the hoppers
-    } else if (d.flow === "bill") {
-      bills += d.amount || 0;
-    } else {
-      coins += d.amount || 0;
-    }
-  }
-  return { since: db.cashBox.since, bills, coins };
+  const add = (src, v) => (src === "bill" ? (bills += v) : (coins += v));
+  if (Array.isArray(d.received)) d.received.forEach((x) => add(x.source, x.value || 0));
+  else if (Array.isArray(d.inserted)) d.inserted.forEach(([src, v]) => add(src, v || 0));
+  else if (r.kind === "gcash" && r.status !== "refunded") coins += d.received || 0;
+  else if (r.status === "refunded") coins += d.amount || 0;
+  else if (d.flow === "bill") bills += d.amount || 0;
+  else coins += d.amount || 0;
+  return { bills, coins };
 }
 
-// ---- Status helpers (shared by pages) ----
-export function coinStatus({ count, capacity }, lowPercent = db.settings.lowStockPercent) {
+// ---- Queries ----
+
+async function getMachine() {
+  const { data, error } = await supabase.from("machines").select("*").eq("id", MACHINE_ID).maybeSingle();
+  fail(error);
+  if (!data) throw new Error(`Machine "${MACHINE_ID}" isn't set up in Supabase yet.`);
+  return data;
+}
+
+async function rows(query) {
+  const { data, error } = await query;
+  fail(error);
+  return data || [];
+}
+
+const transactions = () =>
+  supabase.from("transactions").select("*").eq("machine_id", MACHINE_ID).neq("status", "open");
+
+function stockOf(machine) {
+  const inv = machine.inventory || {}, cap = machine.capacity || {};
+  return Object.fromEntries(COINS.map((c) => [c, {
+    count: Number(inv[c] ?? 0),
+    capacity: Number(cap[c] ?? DEFAULT_CAPACITY[c]),
+  }]));
+}
+
+function machineInfo(machine, stock, open) {
+  const lastSeenSeconds = machine.last_seen
+    ? Math.max(0, Math.round((Date.now() - new Date(machine.last_seen)) / 1000)) : null;
+  const online = lastSeenSeconds != null && lastSeenSeconds < OFFLINE_AFTER_S;
+  const base = { name: machine.name, location: machine.location, online, lastSeenSeconds, mode: machine.mode };
+  const empty = COINS.filter((c) => stock[c].count === 0);
+  const stuck = open.find((t) => ["jam", "hardware"].includes(t.incident));
+  if (!online) return { ...base, state: "offline", reason: lastSeenSeconds == null ? "Never connected" : "Machine is offline" };
+  if (machine.journal_status === "fault" || stuck) {
+    return { ...base, state: "paused", reason: "Service required", service: true, ref: stuck?.ref || "" };
+  }
+  if (empty.length) return { ...base, state: "paused", reason: `₱${empty[0]} hopper empty`, coin: empty[0] };
+  return { ...base, state: "running", reason: "Taking exchanges" };
+}
+
+export function coinStatus({ count, capacity }, lowPercent = lowStockPercent()) {
   if (count === 0) return "empty";
   if (count / capacity < lowPercent / 100) return "low";
   return "good";
 }
 
-export function machineState() {
-  const empty = COINS.filter((c) => db.stock[c].count === 0);
-  const stuck = openIncidents().find((t) => ["jam", "hardware"].includes(t.incident));
-  if (!db.machine.online) return { state: "offline", reason: "Machine is offline" };
-  if (stuck) return { state: "paused", reason: "Service required", service: true, ref: stuck.ref };
-  if (empty.length) return { state: "paused", reason: `₱${empty[0]} hopper empty`, coin: empty[0] };
-  return { state: "running", reason: "Taking exchanges" };
+async function openIncidents() {
+  return (await rows(transactions().in("status", ["incident", "forfeit"]).is("resolved_at", null)
+    .order("created_at", { ascending: false }))).map(toTx);
+}
+
+async function pendingGcash() {
+  return (await rows(transactions().eq("kind", "gcash").eq("status", "pending")
+    .order("created_at", { ascending: true }))).map(toTx);
 }
 
 // ---- Auth (Supabase) ----
+
 async function loadAdmin(authUser) {
   const { data, error } = await supabase.from("admins").select("name, role").eq("id", authUser.id).maybeSingle();
   if (error) throw new Error("Couldn't check your account. Try again.");
   if (!data) return null;
-  db.user = { name: data.name, email: authUser.email, role: data.role };
-  return db.user;
+  currentAdmin = { name: data.name, email: authUser.email, role: data.role };
+  return currentAdmin;
 }
 
 /** Signs in and returns the admin, or throws a message for the sign-in screen. */
@@ -230,150 +224,144 @@ export function watchSignOut(onSignedOut) {
 }
 
 export async function signOut() {
-  db.user = null;
+  currentAdmin = null;
   if (configured) await supabase.auth.signOut();
 }
 
 // ---- Reads ----
-const EXCHANGES = ["bill", "break", "combine"];
 
 export async function getOverview() {
-  await wait();
-  const tx = txs();
+  const today = rangeBounds("today").from;
+  const yesterday = rangeBounds("yesterday");
+  const [machine, todayRows, yesterdayExchanges, open, pending] = await Promise.all([
+    getMachine(),
+    rows(transactions().gte("created_at", today)),
+    supabase.from("transactions").select("number", { count: "exact", head: true })
+      .eq("machine_id", MACHINE_ID).eq("kind", "cash").eq("status", "completed")
+      .gte("created_at", yesterday.from).lt("created_at", yesterday.to)
+      .then(({ count, error }) => { fail(error); return count || 0; }),
+    openIncidents(),
+    pendingGcash(),
+  ]);
+  const tx = todayRows.map(toTx);
   const cashIns = tx.filter((t) => t.type === "gcash");
+  const exchanges = tx.filter((t) => EXCHANGES.includes(t.type)).length;
   const hourly = Array(10).fill(0); // 8 AM to 5 PM
   for (const t of tx) {
     const h = new Date(t.time).getHours() - 8;
     if (h >= 0 && h < hourly.length) hourly[h] += 1;
   }
+  const stock = stockOf(machine);
   return {
-    machine: { ...db.machine, ...machineState() },
-    stock: structuredClone(db.stock),
-    gcashFloat: { ...db.gcashFloat },
+    machine: machineInfo(machine, stock, open),
+    stock,
+    gcashFloat: { balance: machine.gcash_balance, target: machine.gcash_target },
     kpis: {
-      exchanges: tx.filter((t) => EXCHANGES.includes(t.type)).length,
-      exchangesDelta: 8,
+      exchanges,
+      exchangesDelta: exchanges - yesterdayExchanges,
       cashIns: cashIns.length,
-      cashInTotal: cashIns.reduce((s, t) => s + t.amount, 0),
+      cashInTotal: cashIns.reduce((s, t) => s + (t.amount || 0), 0),
       fees: cashIns.reduce((s, t) => s + (t.fee || 0), 0),
     },
     hourly,
-    gcashPending: pendingGcash().length,
-    gcashPendingTotal: pendingGcash().reduce((s, t) => s + t.amount, 0),
-    incidentsOpen: openIncidents().length,
+    gcashPending: pending.length,
+    gcashPendingTotal: pending.reduce((s, t) => s + (t.amount || 0), 0),
+    incidentsOpen: open.length,
   };
 }
 
 export async function getTransactions({ type = "all", range = "today" } = {}) {
-  await wait();
-  const all = txs();
-  let list = all;
-  if (type === "exchange") list = all.filter((t) => EXCHANGES.includes(t.type));
-  else if (type !== "all") list = all.filter((t) => t.type === type);
-  // range is accepted for the real API; the sample data is all "today".
+  const { from, to } = rangeBounds(range);
+  let q = transactions().gte("created_at", from).order("created_at", { ascending: false }).limit(1000);
+  if (to) q = q.lt("created_at", to);
+  const all = (await rows(q)).map(toTx);
+  let items = all;
+  if (type === "exchange") items = all.filter((t) => EXCHANGES.includes(t.type));
+  else if (type !== "all") items = all.filter((t) => t.type === type);
   return {
-    items: list,
-    summary: { count: all.length, handled: all.reduce((s, t) => s + (t.type === "incident" ? 0 : t.amount), 0) },
+    items,
+    summary: { count: all.length, handled: all.reduce((s, t) => s + (t.type === "incident" ? 0 : t.amount || 0), 0) },
     range,
   };
 }
 
 export async function getStock() {
-  await wait();
+  const machine = await getMachine();
+  const [since, activity] = await Promise.all([
+    rows(transactions().gte("created_at", machine.cash_collected_at).limit(5000)),
+    rows(supabase.from("activity").select("*").eq("machine_id", MACHINE_ID)
+      .order("created_at", { ascending: false }).limit(100)),
+  ]);
+  const box = since.reduce((t, r) => {
+    const c = cashIn(r);
+    return { bills: t.bills + c.bills, coins: t.coins + c.coins };
+  }, { bills: 0, coins: 0 });
   return {
-    stock: structuredClone(db.stock),
-    lastCount: structuredClone(db.lastCount),
-    cashBox: cashBoxTotals(),
-    activity: db.activity.map((a) => ({ ...a })),
+    stock: stockOf(machine),
+    lastSeen: machine.last_seen,
+    cashBox: { since: machine.cash_collected_at, ...box },
+    activity: activity.map((a) => ({ id: a.id, kind: a.kind, text: a.text, who: a.who, time: a.created_at })),
   };
 }
 
 export async function getGcashFloat() {
-  await wait();
-  return { ...db.gcashFloat };
+  const machine = await getMachine();
+  return { balance: machine.gcash_balance, target: machine.gcash_target };
 }
 
 /** Cash-in requests from the kiosk. Staff send the money manually, then mark them sent. */
 export async function getGcashRequests() {
-  await wait();
-  const list = txs().filter((t) => t.type === "gcash");
+  const [machine, pending, sent] = await Promise.all([
+    getMachine(),
+    pendingGcash(),
+    rows(transactions().eq("kind", "gcash").eq("status", "sent")
+      .order("sent_at", { ascending: false }).limit(50)),
+  ]);
   return {
-    pending: list.filter((t) => t.gcashStatus === "pending").reverse(), // oldest first: send in order
-    sent: list.filter((t) => t.gcashStatus === "sent"),
-    float: { ...db.gcashFloat },
+    pending,   // oldest first: send in order
+    sent: sent.map(toTx),
+    float: { balance: machine.gcash_balance, target: machine.gcash_target },
   };
 }
 
 export async function getIncidents() {
-  await wait();
-  const list = txs().filter((t) => t.type === "incident");
-  return { open: list.filter((t) => !t.resolved), resolved: list.filter((t) => t.resolved) };
+  const [open, resolved] = await Promise.all([
+    openIncidents(),
+    rows(transactions().in("status", ["incident", "forfeit"]).not("resolved_at", "is", null)
+      .order("resolved_at", { ascending: false }).limit(50)),
+  ]);
+  return { open, resolved: resolved.map(toTx) };
 }
 
 export async function getUsers() {
-  await wait();
-  return db.users.map((u) => ({ ...u }));
+  return rows(supabase.from("admins").select("name, role").order("name"));
 }
 
 export async function getSettings() {
-  await wait();
-  return { ...db.settings };
+  return { gcashFeePercent: GCASH_FEE_PERCENT, lowStockPercent: lowStockPercent() };
 }
 
-// ---- Writes ----
-const who = () => db.user?.name || "Staff";
-const log = (kind, text) =>
-  db.activity.unshift({ id: `A-${Date.now()}`, kind, text, who: who(), time: new Date().toISOString() });
+// ---- Writes (database functions record who did it) ----
 
-export async function recordRefill(coin, coins) {
-  await wait();
-  db.stock[coin].count += coins;
-  db.lastCount[coin] = null; // hopper changed, so it needs a fresh count
-  log("refill", `Refill ₱${coin} +${coins} coins`);
-}
-
-export async function collectCash(amount) {
-  await wait();
-  log("cash", `Collected ₱${amount.toLocaleString()}`);
-  db.cashBox = { since: new Date().toISOString() };
-}
-
-export async function saveCount(counts) {
-  await wait();
-  for (const c of COINS) db.lastCount[c] = { counted: counts[c], expected: db.stock[c].count };
-  log("count", "Stock counted");
-}
-
-export async function topUpFloat(amount) {
-  await wait();
-  db.gcashFloat.balance += amount;
-  log("gcash", `GCash float topped up +₱${amount.toLocaleString()}`);
+async function call(fn, args) {
+  const { error } = await supabase.rpc(fn, { p_machine: MACHINE_ID, ...args });
+  fail(error, "That didn't go through. Try again.");
 }
 
 /** After sending the money from the team's GCash app. */
-export async function markGcashSent(ref) {
-  await wait();
-  const r = rows.find((x) => x.number === ref);
-  if (!r || r.status !== "pending") throw new Error("This request was already handled.");
-  r.status = "sent";
-  r.sent_at = new Date().toISOString();
-  r.sent_by = who();
-  db.gcashFloat.balance -= r.details.amount;
-  log("gcash", `Sent ₱${r.details.amount} to GCash (Ref ${ref})`);
-}
+export const markGcashSent = (ref) => call("mark_gcash_sent", { p_number: ref });
 
 /** Customer was paid back or the issue was otherwise settled. */
-export async function resolveIncident(ref, note = "") {
-  await wait();
-  const r = rows.find((x) => x.number === ref);
-  if (!r) throw new Error("Incident not found.");
-  r.resolved_at = new Date().toISOString();
-  r.resolved_by = who();
-  r.resolution_note = note;
-  log("incident", `Resolved incident ${ref}${note ? `: ${note}` : ""}`);
-}
+export const resolveIncident = (ref, note = "") => call("resolve_incident", { p_number: ref, p_note: note });
+
+export const topUpFloat = (amount) => call("top_up_float", { p_amount: amount });
+
+export const collectCash = (amount) => call("collect_cash", { p_amount: amount });
 
 export async function saveSettings(next) {
-  await wait();
-  db.settings = { ...db.settings, ...next };
+  try {
+    localStorage.setItem("dmarby-low-stock", String(Number(next.lowStockPercent) || 25));
+  } catch {
+    // Private browsing: keep the default.
+  }
 }
