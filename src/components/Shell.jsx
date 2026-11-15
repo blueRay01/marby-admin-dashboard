@@ -8,8 +8,8 @@ const MAIN = [
 ];
 const MORE = [
   { id: "cashbox", label: "Cash box" },
-  { id: "gcash", label: "GCash float" },
-  { id: "kept", label: "Kept money" },
+  { id: "gcash", label: "GCash requests" },
+  { id: "incidents", label: "Incidents" },
   { id: "alerts", label: "Alerts" },
 ];
 const ADMIN = [

@@ -75,7 +75,7 @@ export default function Stock({ onChange }) {
                 </div>
                 <span style={{ marginLeft: "auto" }}>
                   <Pill tone={a.kind === "refill" ? "blue" : "grey"}>
-                    {{ refill: "Refill", cash: "Cash", count: "Count" }[a.kind]}
+                    {{ refill: "Refill", cash: "Cash", count: "Count", gcash: "GCash", incident: "Incident" }[a.kind]}
                   </Pill>
                 </span>
               </div>

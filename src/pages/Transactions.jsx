@@ -6,37 +6,53 @@ const FILTERS = [
   { id: "all", label: "All" },
   { id: "exchange", label: "Exchange" },
   { id: "gcash", label: "GCash" },
-  { id: "kept", label: "Kept" },
+  { id: "refund", label: "Refunds" },
+  { id: "incident", label: "Incidents" },
 ];
 
-const TITLES = {
+export const TITLES = {
   bill: "Bill to coins", break: "Break coins", combine: "Combine coins",
-  gcash: "GCash cash-in", kept: "Kept after timeout",
+  gcash: "GCash cash-in", refund: "GCash cancelled",
 };
+
+export const txTitle = (t) => (t.type === "incident" ? t.title : TITLES[t.type]);
 
 const PAGE = 7;
 
+function StatusPill({ t }) {
+  if (t.type === "gcash") {
+    return t.gcashStatus === "sent" ? <Pill tone="blue">Sent</Pill> : <Pill tone="amber">To send</Pill>;
+  }
+  if (t.type === "incident") {
+    return t.resolved ? <Pill tone="grey">Resolved</Pill> : <Pill tone="red">Owes {peso(t.amount)}</Pill>;
+  }
+  if (t.type === "refund") return <Pill tone="grey">Coins returned</Pill>;
+  return null;
+}
+
 export function TxRow({ t }) {
+  const tone = t.type === "incident" && !t.resolved ? "red" : t.type === "gcash" && t.gcashStatus === "pending" ? "amber" : "";
   return (
     <div className="tx">
-      <div className={`tx-icon ${t.type === "kept" ? "amber" : ""}`}>{Icon[t.type]}</div>
-      <div>
-        <div className="tx-title">{TITLES[t.type]}</div>
-        <div className="tx-meta">{timeOf(t.time)}, {t.detail}</div>
+      <div className={`tx-icon ${tone}`}>{Icon[t.type]}</div>
+      <div style={{ minWidth: 0 }}>
+        <div className="tx-title">{txTitle(t)}</div>
+        <div className="tx-meta">{timeOf(t.time)}, Ref {t.ref}{t.detail ? `, ${t.detail}` : ""}</div>
       </div>
       <div className="tx-amt">
         {peso(t.amount)}
         {t.fee ? <Pill tone="grey">Fee {peso(t.fee)}</Pill> : null}
-        {t.type === "kept" && !t.reviewed ? <Pill tone="amber">Review</Pill> : null}
+        <StatusPill t={t} />
       </div>
     </div>
   );
 }
 
 function downloadCsv(items) {
-  const head = ["id", "type", "time", "amount", "fee", "detail"];
+  const head = ["ref", "type", "time", "amount", "fee", "status", "detail"];
   const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-  const rows = items.map((t) => [t.id, TITLES[t.type], new Date(t.time).toLocaleString("en-PH"), t.amount, t.fee || 0, t.detail]);
+  const status = (t) => t.gcashStatus || (t.type === "incident" ? (t.resolved ? "resolved" : "open") : "completed");
+  const rows = items.map((t) => [t.ref, txTitle(t), new Date(t.time).toLocaleString("en-PH"), t.amount, t.fee || 0, status(t), t.detail]);
   const csv = [head, ...rows].map((r) => r.map(esc).join(",")).join("\n");
   const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
   const a = Object.assign(document.createElement("a"), { href: url, download: `dmarby-transactions.csv` });

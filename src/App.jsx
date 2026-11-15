@@ -5,11 +5,11 @@ import SignIn from "./pages/SignIn.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import Transactions from "./pages/Transactions.jsx";
 import Stock from "./pages/Stock.jsx";
-import { Alerts, AuditLog, CashBox, GcashFloat, Kept, Settings, Users } from "./pages/More.jsx";
+import { Alerts, AuditLog, CashBox, GcashRequests, Incidents, Settings, Users } from "./pages/More.jsx";
 
 const PAGES = {
   dashboard: Dashboard, transactions: Transactions, stock: Stock, cashbox: CashBox,
-  gcash: GcashFloat, kept: Kept, alerts: Alerts, settings: Settings, users: Users, audit: AuditLog,
+  gcash: GcashRequests, incidents: Incidents, alerts: Alerts, settings: Settings, users: Users, audit: AuditLog,
 };
 const ADMIN_ONLY = ["settings", "users", "audit"];
 
@@ -37,7 +37,8 @@ export default function App() {
       const next = {};
       const empty = COINS.filter((c) => d.stock[c].count === 0);
       if (empty.length) next.stock = { tone: "red", text: `₱${empty[0]} empty` };
-      if (d.keptToReview) next.kept = { tone: "amber", text: `${d.keptToReview} to review` };
+      if (d.gcashPending) next.gcash = { tone: "amber", text: `${d.gcashPending} to send` };
+      if (d.incidentsOpen) next.incidents = { tone: "red", text: `${d.incidentsOpen} open` };
       setBadges(next);
     });
   }, []);

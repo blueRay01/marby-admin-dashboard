@@ -60,10 +60,29 @@ function Body({ data, go }) {
         </div>
       </div>
 
-      {machine.state === "paused" && (
+      {machine.state === "paused" && (machine.service ? (
+        <button className="note red" style={{ width: "100%", textAlign: "left" }} onClick={() => go("incidents")}>
+          <span>Machine needs service (Ref {machine.ref}). Exchanges are paused.</span>
+          <span className="link">Incidents</span>
+        </button>
+      ) : (
         <button className="note red" style={{ width: "100%", textAlign: "left" }} onClick={() => go("stock")}>
           <span>Refill ₱{machine.coin} coins to resume exchanges.</span>
           <span className="link">Stock</span>
+        </button>
+      ))}
+
+      {data.incidentsOpen > 0 && !machine.service && (
+        <button className="note red" style={{ width: "100%", textAlign: "left" }} onClick={() => go("incidents")}>
+          <span>{data.incidentsOpen} open incident{data.incidentsOpen > 1 ? "s" : ""}. A customer is owed money.</span>
+          <span className="link">Incidents</span>
+        </button>
+      )}
+
+      {data.gcashPending > 0 && (
+        <button className="note amber" style={{ width: "100%", textAlign: "left" }} onClick={() => go("gcash")}>
+          <span>{data.gcashPending} GCash cash-in{data.gcashPending > 1 ? "s" : ""} to send ({peso(data.gcashPendingTotal)}).</span>
+          <span className="link">Send</span>
         </button>
       )}
 
@@ -71,7 +90,7 @@ function Body({ data, go }) {
         <div className="kpi"><div className="label">Exchanges</div><div className="n">{kpis.exchanges}</div>
           <div className="d">+{kpis.exchangesDelta} vs yesterday</div></div>
         <div className="kpi"><div className="label">Cash-ins</div><div className="n">{kpis.cashIns}</div>
-          <div className="d">{peso(kpis.cashInTotal)} sent</div></div>
+          <div className="d">{peso(kpis.cashInTotal)} total</div></div>
         <div className="kpi"><div className="label">Fees</div><div className="n">{peso(kpis.fees)}</div>
           <div className="d">from cash-ins</div></div>
       </div>
