@@ -287,10 +287,12 @@ export async function getTransactions({ type = "all", range = "today" } = {}) {
 
 export async function getStock() {
   const machine = await getMachine();
-  const [since, activity] = await Promise.all([
+  const [since, activity, pending] = await Promise.all([
     rows(transactions().gte("created_at", machine.cash_collected_at).limit(5000)),
     rows(supabase.from("activity").select("*").eq("machine_id", MACHINE_ID)
       .order("created_at", { ascending: false }).limit(100)),
+    rows(supabase.from("stock_adjustments").select("*").eq("machine_id", MACHINE_ID)
+      .eq("status", "pending").order("id")),
   ]);
   const box = since.reduce((t, r) => {
     const c = cashIn(r);
@@ -301,6 +303,8 @@ export async function getStock() {
     lastSeen: machine.last_seen,
     cashBox: { since: machine.cash_collected_at, ...box },
     activity: activity.map((a) => ({ id: a.id, kind: a.kind, text: a.text, who: a.who, time: a.created_at })),
+    pending: pending.map((a) => ({ id: a.id, coin: a.coin, kind: a.kind, amount: a.amount,
+                                   who: a.requested_by, time: a.requested_at })),
   };
 }
 
@@ -357,6 +361,19 @@ export const resolveIncident = (ref, note = "") => call("resolve_incident", { p_
 export const topUpFloat = (amount) => call("top_up_float", { p_amount: amount });
 
 export const collectCash = (amount) => call("collect_cash", { p_amount: amount });
+
+/** Queue coins added to a hopper. The kiosk applies it between transactions. */
+export const recordRefill = (coin, coins) =>
+  call("request_stock_adjustment", { p_coin: coin, p_kind: "refill", p_amount: coins });
+
+/** Queue a physical count for each coin given ({20: 37, 5: 98}). */
+export async function saveCount(counts) {
+  for (const [coin, n] of Object.entries(counts)) {
+    await call("request_stock_adjustment", { p_coin: Number(coin), p_kind: "count", p_amount: n });
+  }
+}
+
+export const cancelAdjustment = (id) => call("cancel_stock_adjustment", { p_id: id });
 
 export async function saveSettings(next) {
   try {
