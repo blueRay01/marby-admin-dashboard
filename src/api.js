@@ -150,10 +150,10 @@ function machineInfo(machine, stock, open) {
   const online = lastSeenSeconds != null && lastSeenSeconds < OFFLINE_AFTER_S;
   const base = { name: machine.name, location: machine.location, online, lastSeenSeconds, mode: machine.mode };
   const empty = COINS.filter((c) => stock[c].count === 0);
-  const stuck = open.find((t) => ["jam", "hardware"].includes(t.incident));
+  // The kiosk keeps going after a failure, so only an error showing right now pauses it.
   if (!online) return { ...base, state: "offline", reason: lastSeenSeconds == null ? "Never connected" : "Machine is offline" };
-  if (machine.journal_status === "fault" || stuck) {
-    return { ...base, state: "paused", reason: "Service required", service: true, ref: stuck?.ref || "" };
+  if (machine.journal_status === "fault") {
+    return { ...base, state: "paused", reason: "Showing an error", service: true, ref: open[0]?.ref || "" };
   }
   if (empty.length) return { ...base, state: "paused", reason: `₱${empty[0]} hopper empty`, coin: empty[0] };
   return { ...base, state: "running", reason: "Taking exchanges" };

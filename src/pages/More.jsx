@@ -164,9 +164,9 @@ function incidentText(t) {
   const d = t.info || {};
   switch (t.incident) {
     case "jam":
-      return "Coins got stuck while paying out. Clear the jam, then use Kiosk controls on the machine to mark it fixed.";
+      return "Coins got stuck while paying out. The kiosk kept going; check that dispenser and pay the customer back.";
     case "hardware":
-      return "The machine stopped itself for safety. Someone needs to check it on site.";
+      return d.fault || "The kiosk hit a problem mid-transaction and kept going. Check the machine and the customer's receipt.";
     case "cant_change":
       return "The machine took a bill but didn't have the coins to change it.";
     case "wrong_bill_unpayable":
@@ -252,7 +252,7 @@ export function Alerts({ go }) {
   useEffect(() => { getOverview().then(setD); }, []);
   if (!d) return <><Title>Alerts</Title><div className="skeleton" /></>;
   const alerts = [];
-  if (d.machine.service) alerts.push({ tone: "red", text: "Machine needs service. Exchanges are paused.", to: "incidents" });
+  if (d.machine.service) alerts.push({ tone: "red", text: "The kiosk is showing an error right now.", to: "incidents" });
   COINS.forEach((c) => {
     const s = coinStatus(d.stock[c]);
     if (s === "empty") alerts.push({ tone: "red", text: `₱${c} hopper is empty. Exchanges are paused.`, to: "stock" });

@@ -70,7 +70,7 @@ function Body({ data, go }) {
 
       {machine.state === "paused" && (machine.service ? (
         <button className="note red" style={{ width: "100%", textAlign: "left" }} onClick={() => go("incidents")}>
-          <span>Machine needs service (Ref {machine.ref}). Exchanges are paused.</span>
+          <span>The kiosk is showing an error{machine.ref ? ` (Ref ${machine.ref})` : ""}. It goes back to the menu by itself within a minute.</span>
           <span className="link">Incidents</span>
         </button>
       ) : (
