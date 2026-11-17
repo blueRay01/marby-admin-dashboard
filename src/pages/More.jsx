@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   COINS, coinStatus, getGcashRequests, getIncidents, getOverview, getSettings, getStock, getUsers,
-  markGcashSent, resolveIncident, saveSettings, topUpFloat,
+  markGcashSent, resolveIncident, saveSettings, topUpFloat, setGcashFloat,
 } from "../api.js";
 import { Bar, Icon, Pill, Sheet, dateOf, peso, timeOf } from "../components/ui.jsx";
 import { TxRow } from "./Transactions.jsx";
@@ -59,13 +59,16 @@ export function GcashRequests({ onChange }) {
   const [confirm, setConfirm] = useState(null);   // request being marked sent
   const [topUp, setTopUp] = useState(false);
   const [amount, setAmount] = useState("");
+  const [editFloat, setEditFloat] = useState(false);
+  const [newBalance, setNewBalance] = useState("");
+  const [savingFloat, setSavingFloat] = useState(false);
   const [copied, setCopied] = useState(null);
   const [error, setError] = useState("");
   const load = () => getGcashRequests().then(setData);
   useEffect(() => { load(); }, []);
   if (!data) return <><Title>GCash requests</Title><div className="skeleton" /></>;
 
-  const { pending, sent, float } = data;
+  const { pending, sent, float, daily } = data;
   const owed = pending.reduce((s, t) => s + t.amount, 0);
   const share = float.balance / float.target;
   const short = owed > float.balance;
@@ -88,10 +91,20 @@ export function GcashRequests({ onChange }) {
         <Bar value={share} tone={share < 0.2 || short ? "amber" : ""} />
         <div className="row small" style={{ marginTop: 10 }}>
           <span className="muted">{pending.length ? `${peso(owed)} waiting to be sent` : `Target ${peso(float.target)}`}</span>
-          <button className="link-btn" onClick={() => setTopUp(true)}>Record top-up</button>
+          <div className="row" style={{ gap: 12 }}>
+            <button className="link-btn" onClick={() => setTopUp(true)}>Record top-up</button>
+            <button className="link-btn" onClick={() => { setError(""); setNewBalance(String(float.balance)); setEditFloat(true); }}>Edit float</button>
+          </div>
         </div>
       </div>
 
+      <div className="card" style={{marginBottom:16}}>
+        <div className="row"><strong>GCash transactions today</strong><strong>{daily.count} / {daily.limit}</strong></div>
+        <Bar value={daily.count / daily.limit} tone={daily.count >= daily.limit ? "amber" : ""} />
+        <div className="muted small" style={{marginTop:8}}>{daily.count >= daily.limit
+          ? "Daily limit reached. New cash-ins are unavailable until midnight (Philippine time)."
+          : `${daily.limit - daily.count} cash-in${daily.limit - daily.count === 1 ? "" : "s"} remaining today. Resets at midnight (Philippine time).`}</div>
+      </div>
       <Tabs value={tab} onChange={setTab}
             tabs={[{ id: "pending", label: `To send (${pending.length})` }, { id: "sent", label: `Sent (${sent.length})` }]} />
 
@@ -141,6 +154,31 @@ export function GcashRequests({ onChange }) {
           </div>
           {error && <p className="error">{error}</p>}
           <button className="btn primary" onClick={send}>Yes, I sent it</button>
+        </Sheet>
+      )}
+
+      {editFloat && (
+        <Sheet title="Set GCash float" onClose={() => { if (!savingFloat) setEditFloat(false); }}>
+          <p className="muted small" style={{ marginBottom: 14 }}>
+            Replace the current balance of {peso(float.balance)} with an exact amount. This is not a top-up.
+          </p>
+          <label className="field"><span>New GCash float (₱)</span>
+            <input className="input" type="number" min="0" step="0.01" autoFocus
+                   value={newBalance} onChange={(e) => setNewBalance(e.target.value)} />
+          </label>
+          {error && <p className="error" role="alert">{error}</p>}
+          <button className="btn primary"
+                  disabled={savingFloat || newBalance.trim() === "" || !Number.isFinite(Number(newBalance)) || Number(newBalance) < 0 || !/^\d+(?:\.\d{1,2})?$/.test(newBalance.trim())}
+                  onClick={async () => {
+                    setSavingFloat(true); setError("");
+                    try {
+                      await setGcashFloat(Number(newBalance));
+                      await load(); onChange?.(); setEditFloat(false);
+                    } catch (e) { setError(e.message); }
+                    finally { setSavingFloat(false); }
+                  }}>
+            {savingFloat ? "Saving…" : "Save exact balance"}
+          </button>
         </Sheet>
       )}
 

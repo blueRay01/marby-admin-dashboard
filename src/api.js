@@ -314,14 +314,32 @@ export async function getGcashFloat() {
 }
 
 /** Cash-in requests from the kiosk. Staff send the money manually, then mark them sent. */
+// The kiosk timestamps are Philippine-local; calculate the same day in UTC for Supabase.
+function manilaDayBounds() {
+  const today = new Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Manila',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+  const start = new Date(`${today}T00:00:00+08:00`);
+  return { start: start.toISOString(), end: new Date(start.getTime() + 86400000).toISOString() };
+}
+
+export async function getGcashDailyCount() {
+  const {start,end} = manilaDayBounds();
+  const {count,error} = await transactions().select('number',{count:'exact',head:true})
+    .eq('kind','gcash').in('status',['pending','sent','completed'])
+    .gte('created_at',start).lt('created_at',end);
+  fail(error);
+  return {count: count ?? 0,limit:5};
+}
+
 export async function getGcashRequests() {
-  const [machine, pending, sent] = await Promise.all([
+  const [machine, pending, sent, daily] = await Promise.all([
     getMachine(),
     pendingGcash(),
     rows(transactions().eq("kind", "gcash").eq("status", "sent")
       .order("sent_at", { ascending: false }).limit(50)),
+    getGcashDailyCount(),
   ]);
   return {
+    daily,
     pending,   // oldest first: send in order
     sent: sent.map(toTx),
     float: { balance: machine.gcash_balance, target: machine.gcash_target },
@@ -359,6 +377,9 @@ export const markGcashSent = (ref) => call("mark_gcash_sent", { p_number: ref })
 export const resolveIncident = (ref, note = "") => call("resolve_incident", { p_number: ref, p_note: note });
 
 export const topUpFloat = (amount) => call("top_up_float", { p_amount: amount });
+
+/** Set the absolute GCash balance (not a top-up). Requires the SQL RPC migration. */
+export const setGcashFloat = (amount) => call("set_gcash_float", { p_balance: amount });
 
 export const collectCash = (amount) => call("collect_cash", { p_amount: amount });
 
