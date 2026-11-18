@@ -7,6 +7,7 @@
 import { MACHINE_ID, configured, supabase } from "./supabase.js";
 
 export const COINS = [20, 10, 5, 1];
+const GCASH_DAILY_LIMIT = 5;          // must match GCASH_DAILY_LIMIT in dmarby.py
 const DEFAULT_CAPACITY = { 20: 60, 10: 80, 5: 100, 1: 200 };
 const OFFLINE_AFTER_S = 180;          // no heartbeat for 3 minutes = offline
 const GCASH_FEE_PERCENT = 3;          // set on the kiosk (dmarby.py GCASH_FEE_RATE)
@@ -322,12 +323,13 @@ function manilaDayBounds() {
 }
 
 export async function getGcashDailyCount() {
-  const {start,end} = manilaDayBounds();
-  const {count,error} = await transactions().select('number',{count:'exact',head:true})
-    .eq('kind','gcash').in('status',['pending','sent','completed'])
-    .gte('created_at',start).lt('created_at',end);
+  const { start, end } = manilaDayBounds();
+  const { count, error } = await supabase.from("transactions")
+    .select("number", { count: "exact", head: true })
+    .eq("machine_id", MACHINE_ID).eq("kind", "gcash").in("status", ["pending", "sent"])
+    .gte("created_at", start).lt("created_at", end);
   fail(error);
-  return {count: count ?? 0,limit:5};
+  return { count: count ?? 0, limit: GCASH_DAILY_LIMIT };
 }
 
 export async function getGcashRequests() {

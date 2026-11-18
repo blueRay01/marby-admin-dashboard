@@ -163,12 +163,12 @@ export function GcashRequests({ onChange }) {
             Replace the current balance of {peso(float.balance)} with an exact amount. This is not a top-up.
           </p>
           <label className="field"><span>New GCash float (₱)</span>
-            <input className="input" type="number" min="0" step="0.01" autoFocus
-                   value={newBalance} onChange={(e) => setNewBalance(e.target.value)} />
+            <input className="input" inputMode="numeric" autoFocus
+                   value={newBalance} onChange={(e) => setNewBalance(e.target.value.replace(/\D/g, ""))} />
           </label>
           {error && <p className="error" role="alert">{error}</p>}
           <button className="btn primary"
-                  disabled={savingFloat || newBalance.trim() === "" || !Number.isFinite(Number(newBalance)) || Number(newBalance) < 0 || !/^\d+(?:\.\d{1,2})?$/.test(newBalance.trim())}
+                  disabled={savingFloat || newBalance === ""}
                   onClick={async () => {
                     setSavingFloat(true); setError("");
                     try {
