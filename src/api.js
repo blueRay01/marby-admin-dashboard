@@ -31,6 +31,7 @@ const describe = (plan = {}) =>
 const FLOW_NAMES = { bill: "bill to coins", break: "break coins", combine: "combine coins", gcash: "GCash" };
 const INCIDENT_TITLES = {
   jam: "Coins got stuck",
+  wrong_coin_unpayable: "Wrong coin, couldn't change",
   hardware: "Service required",
   cant_change: "Couldn't give change",
   wrong_bill_unpayable: "Wrong bill, couldn't change",

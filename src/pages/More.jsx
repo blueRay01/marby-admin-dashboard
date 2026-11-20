@@ -65,7 +65,11 @@ export function GcashRequests({ onChange }) {
   const [copied, setCopied] = useState(null);
   const [error, setError] = useState("");
   const load = () => getGcashRequests().then(setData);
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    const id = setInterval(load, 15000); // new cash-ins appear without a refresh
+    return () => clearInterval(id);
+  }, []);
   if (!data) return <><Title>GCash requests</Title><div className="skeleton" /></>;
 
   const { pending, sent, float, daily } = data;
@@ -209,6 +213,8 @@ function incidentText(t) {
       return "The machine took a bill but didn't have the coins to change it.";
     case "wrong_bill_unpayable":
       return `Customer picked ₱${d.picked_bill} but inserted a ₱${d.bill} bill the machine couldn't change.`;
+    case "wrong_coin_unpayable":
+      return "Customer inserted a bigger coin than they picked, and the machine didn't have the smaller coins to break it.";
     case "overpayment":
       return "Customer put in more than needed.";
     case "timeout":
@@ -216,6 +222,64 @@ function incidentText(t) {
     default:
       return "Check the machine and the customer's receipt.";
   }
+}
+
+// ---- "Show details" on incidents ----
+
+const FLOW_LABELS = { bill: "Bill to coins", break: "Break coins", combine: "Combine coins", gcash: "GCash cash-in" };
+
+const coinList = (plan = {}) =>
+  Object.entries(plan).filter(([, n]) => n > 0)
+    .sort(([a], [b]) => Number(b) - Number(a))
+    .map(([c, n]) => (n === 1 ? `₱${c}` : `${n} × ₱${c}`)).join(" + ");
+
+function incidentDetails(t) {
+  const d = t.info || {};
+  const rows = [
+    ["Reference", t.ref],
+    ["When", `${dateOf(t.time)}, ${timeOf(t.time)}`],
+    ["Mode", t.mode === "demo" ? "Demo (test only)" : "Real machine"],
+  ];
+  if (d.flow) rows.push(["During", FLOW_LABELS[d.flow] || d.flow]);
+  if (d.fault) rows.push(["What the machine reported", d.fault]);
+
+  // Hardware records list each item in `received`; demo records use `inserted`.
+  const money = Array.isArray(d.received) ? d.received.map((r) => [r.source, r.value])
+    : Array.isArray(d.inserted) ? d.inserted : [];
+  if (money.length) {
+    const total = money.reduce((s, [, v]) => s + (v || 0), 0);
+    rows.push(["Money put in", `${money.map(([k, v]) => `₱${v} ${k}`).join(", ")} (total ${peso(total)})`]);
+  }
+  if (Array.isArray(d.uncredited_inputs) && d.uncredited_inputs.length) {
+    rows.push(["Taken in but not credited", d.uncredited_inputs.map((r) => `₱${r.value} ${r.source}`).join(", ")]);
+  }
+  if (d.picked_bill) rows.push(["Bill they picked", peso(d.picked_bill)]);
+  if (d.bill) rows.push(["Bill they inserted", peso(d.bill)]);
+  if (d.excess) rows.push(["Overpaid by", peso(d.excess)]);
+  if (d.plan && Object.keys(d.plan).length) rows.push(["Coins it was going to give", coinList(d.plan)]);
+  if (d.dispensed && Object.keys(d.dispensed).length) rows.push(["Coins already given", coinList(d.dispensed) || "None"]);
+  if (d.gcash_customer) rows.push(["GCash customer", `${d.gcash_customer.name || "?"}, ${d.gcash_customer.number || "?"}`]);
+  rows.push(["Owed to customer", peso(t.amount)]);
+  return rows;
+}
+
+function IncidentDetails({ t }) {
+  return (
+    <details className="inc-details">
+      <summary>Show details</summary>
+      <dl className="inc-grid">
+        {incidentDetails(t).map(([label, value]) => (
+          <div key={label} style={{ display: "contents" }}>
+            <dt>{label}</dt><dd>{value}</dd>
+          </div>
+        ))}
+      </dl>
+      <details className="inc-raw-wrap">
+        <summary>Raw record (for the team)</summary>
+        <pre className="inc-raw">{JSON.stringify(t.info, null, 2)}</pre>
+      </details>
+    </details>
+  );
 }
 
 export function Incidents({ onChange }) {
@@ -251,6 +315,7 @@ export function Incidents({ onChange }) {
                 <div className="muted small" style={{ marginTop: 4, lineHeight: 1.5 }}>{incidentText(t)}</div>
               </div>
             </div>
+            <IncidentDetails t={t} />
             <div className="row" style={{ margin: "14px 0", paddingTop: 12, borderTop: "1px solid var(--line)" }}>
               <span className="label">Owed to customer</span><b style={{ fontSize: 20 }}>{peso(t.amount)}</b>
             </div>
@@ -264,6 +329,7 @@ export function Incidents({ onChange }) {
             <div key={t.ref}>
               <TxRow t={t} />
               <div className="tx-note">Resolved by {t.resolvedBy}, {timeOf(t.resolvedAt)}{t.note ? `: ${t.note}` : ""}</div>
+              <IncidentDetails t={t} />
             </div>
           ))}
         </div>
